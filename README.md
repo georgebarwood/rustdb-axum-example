@@ -2,9 +2,11 @@ Axum-based webserver, with timed jobs, password hashing, data compression, email
 
 Command line arguments:
 
-Master mode: address:port ( default is 0.0.0.0:80 ).
+Master mode: address:port 
 
-Slave mode: address:port slave  <master-URL> <login cookies>
+Default address:post is 0.0.0.0:80
+
+Slave mode: address:port slave  {master-URL} {login cookies}
 
 In slave mode, the master database is replicated, and only GET queries are allowed.
 
