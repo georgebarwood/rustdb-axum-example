@@ -363,6 +363,7 @@ async fn sync_loop(rx: oneshot::Receiver<bool>, state: Arc<SharedState>) {
     }
 }
 
+/// Sleep function that checks real time elapsed.
 async fn sleep_real(secs: u64) {
     let start = std::time::SystemTime::now();
     for _ in (0..secs).step_by(10) {
@@ -380,6 +381,7 @@ async fn sleep_real(secs: u64) {
     }
 }
 
+/// Get data from master seerver, retries in case of error.
 async fn rget(state: Arc<SharedState>, query: &str) -> Vec<u8> {
     // get a client builder
     let client = reqwest::Client::builder()
