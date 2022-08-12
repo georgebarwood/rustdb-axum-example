@@ -13,8 +13,8 @@ use axum::{
 };
 use rustdb::{
     c_int, c_value, check_types, standard_builtins, AccessPagedData, AtomicFile, Block, BuiltinMap,
-    CExp, CExpPtr, CompileFunc, DataKind, Database, EvalEnv, Expr, GenTransaction, Part,
-    SharedPagedData, SimpleFileStorage, Transaction, Value, ObjRef,
+    CExp, CExpPtr, CompileFunc, DataKind, Database, EvalEnv, Expr, GenTransaction, ObjRef, Part,
+    SharedPagedData, SimpleFileStorage, Transaction, Value,
 };
 use std::{collections::BTreeMap, rc::Rc, sync::Arc, thread};
 
@@ -180,10 +180,6 @@ async fn main() {
         replicate_credentials,
     });
 
-    // Start the sync task.
-    let ssc = ss.clone();
-    tokio::spawn(async move { sync_loop(sync_rx, ssc).await });
-
     if is_master {
         // Start the email task.
         let ssc = ss.clone();
@@ -192,9 +188,13 @@ async fn main() {
         // Start the sleep task.
         let ssc = ss.clone();
         tokio::spawn(async move { sleep_loop(sleep_rx, ssc).await });
+    } else {
+        // Start the sync task.
+        let ssc = ss.clone();
+        tokio::spawn(async move { sync_loop(sync_rx, ssc).await });
     }
 
-    // Start the server task that updates the database.
+    // Start the task that updates the database.
     let ssc = ss.clone();
     thread::spawn(move || {
         let ss = ssc;
@@ -207,8 +207,7 @@ async fn main() {
             let sql = sm.st.x.qy.sql.clone();
             db.run_timed(&sql, &mut *sm.st.x);
 
-            if sm.st.log && db.changed()
-            {
+            if sm.st.log && db.changed() {
                 if let Some(t) = db.get_table(&ObjRef::new("log", "Transaction")) {
                     // Append serialised transaction to log.Transaction table
                     let ser = rmp_serde::to_vec(&sm.st.x.qy).unwrap();
