@@ -14,7 +14,7 @@ use axum::{
 use rustdb::{
     c_int, c_value, check_types, standard_builtins, AccessPagedData, AtomicFile, Block, BuiltinMap,
     CExp, CExpPtr, CompileFunc, DataKind, Database, EvalEnv, Expr, GenTransaction, Part,
-    SharedPagedData, SimpleFileStorage, Transaction, Value,
+    SharedPagedData, SimpleFileStorage, Transaction, Value, ObjRef,
 };
 use std::{collections::BTreeMap, rc::Rc, sync::Arc, thread};
 
@@ -207,12 +207,19 @@ async fn main() {
             let sql = sm.st.x.qy.sql.clone();
             db.run_timed(&sql, &mut *sm.st.x);
 
-            let updates = if sm.st.log {
-                let ser = rmp_serde::to_vec(&sm.st.x.qy).unwrap();
-                db.save_and_log(Some(Value::RcBinary(Rc::new(ser))))
-            } else {
-                db.save()
-            };
+            if sm.st.log && db.changed()
+            {
+                if let Some(t) = db.get_table(&ObjRef::new("log", "Transaction")) {
+                    // Append serialised transaction to log.Transaction table
+                    let ser = rmp_serde::to_vec(&sm.st.x.qy).unwrap();
+                    let ser = Value::RcBinary(Rc::new(ser));
+                    let mut row = t.row();
+                    row.id = t.alloc_id() as i64;
+                    row.values[0] = ser;
+                    t.insert(&db, &mut row);
+                }
+            }
+            let updates = db.save();
             if updates > 0 {
                 let _ = ss.wait_tx.send(());
                 println!("Pages updated={}", updates);
