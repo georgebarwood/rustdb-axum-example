@@ -332,11 +332,6 @@ impl IntoResponse for ServerTrans {
 /// task for syncing with master database
 async fn sync_loop(rx: oneshot::Receiver<bool>, state: Arc<SharedState>) {
     let db_is_new = rx.await.unwrap();
-    println!(
-        "sync_loop got db_is_new={} source={} credentials={}",
-        db_is_new, state.replicate_source, state.replicate_credentials
-    );
-
     if db_is_new {
         let sql = rget(state.clone(), "/ScriptExact").await;
         let sql = std::str::from_utf8(&sql).unwrap().to_string();
@@ -347,24 +342,19 @@ async fn sync_loop(rx: oneshot::Receiver<bool>, state: Arc<SharedState>) {
         println!("New slave database initialised");
     }
     loop {
-        let url = {
+        let tid = {
             let apd = AccessPagedData::new_reader(state.spd.clone());
             let db = Database::new(apd, "", state.bmap.clone());
             let lt = db.table("log", "Transaction");
-            let tid = lt.id_gen.get();
-            format!("/GetTransaction?k={}", tid)
+            lt.id_gen.get()
         };
-
-        println!("sync_loop calling rget url ={}", url);
+        let url = format!("/GetTransaction?k={}", tid);
         let ser = rget(state.clone(), &url).await;
-        println!("sync_loop returnd from rget");
-
         if !ser.is_empty() {
             let mut st = ServerTrans::new();
             st.x.qy = rmp_serde::from_slice(&ser).unwrap();
-            println!("sync_loop qy={:?}", st.x.qy);
             state.process(st).await;
-            println!("sync_loop finished query");
+            println!("Slave database updated Transaction Id={}", tid);
         }
     }
 }
