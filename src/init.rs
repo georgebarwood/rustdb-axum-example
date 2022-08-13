@@ -163,34 +163,40 @@ VALUES (cid, '
 GO'
 END
 GO
-CREATE FN [sys].[ScriptData]( t int ) AS
+CREATE FN [sys].[ScriptData]( t int, mode int ) AS
 BEGIN
-    DECLARE ins string, val string, filter string
+    DECLARE filter string
 
-    SET filter = CASE 
+    IF t < 6 SET filter = CASE 
        WHEN t = 1 THEN ' WHERE Id != 1' -- Sys
        WHEN t = 2 THEN ' WHERE Id > 6' -- Table
        WHEN t = 3 THEN ' WHERE Table > 6' -- Field
        WHEN t = 4 THEN ' WHERE Id > 6' -- Index
        WHEN t = 5 THEN ' WHERE Index > 6' -- IndexColumn
-    ELSE '' END
+       ELSE '' END
+    ELSE IF mode = 2
+    BEGIN
+      DECLARE tname string SET tname = sys.TableName(t) 
+      DECLARE schema int SET schema = Schema FROM sys.Table WHERE Id = t
+      DECLARE sname string SET sname = sys.SchemaName(schema)
+      SET filter = CASE
+        WHEN sname = 'log' OR sname = 'email' OR sname = 'login' OR sname = 'timed'
+        THEN ' WHERE 1 = 0'
+        ELSE '' END
+    END    
 
-    SET ins = '
-INSERT INTO ' | sys.TableName(Id) | sys.ColNames(Id) | ' VALUES 
-',
-       
+    SELECT '
+INSERT INTO ' | sys.TableName(t) | sys.ColNames(t) | ' VALUES 
+'       
 
-        val = 'SELECT ''(''|' | sys.ColValues(Id) | '|'')
-''' | ' FROM ' | sys.TableName(Id) | filter
-    FROM sys.Table WHERE Id = t
+    EXECUTE( 'SELECT ''(''|' | sys.ColValues(t) | '|'')
+''' | ' FROM ' | sys.TableName(t) | filter )
 
-    SELECT ins
-    EXECUTE( val )
     SELECT 'GO
 '
 END
 GO
-CREATE FN [sys].[ScriptSchema]( s int ) AS
+CREATE FN [sys].[ScriptSchema]( s int, mode int ) AS
 BEGIN
   DECLARE sname string SET sname = sys.SchemaName(s)
 
@@ -220,19 +226,8 @@ GO'
 
   IF sname != 'sys' AND sname != 'browse'
   BEGIN
-    DECLARE ins string, val string
-    FOR ins = '
-INSERT INTO ' | sys.TableName(Id) | sys.ColNames(Id) | ' VALUES 
-',
-        val = 'SELECT ''(''|' | sys.ColValues(Id) | '|'')
-''' | ' FROM ' | sys.TableName(Id)
-    FROM sys.Table WHERE Schema = s ORDER BY Name
-    BEGIN
-      SELECT ins
-      EXECUTE( val )
-      SELECT 'GO
-'
-    END
+    FOR t = Id FROM sys.Table WHERE Schema = s ORDER BY Name
+      EXEC sys.ScriptData(t,mode)
   END
 END
 GO
@@ -707,6 +702,9 @@ GO
 CREATE FN [web].[Head]( title string ) AS 
 BEGIN 
   EXEC web.SetContentType( 'text/html;charset=utf-8' )
+
+  DECLARE back string SET back = browse.backurl()
+
   SELECT '<html>
 <head>
 <meta http-equiv=\"Content-type\" content=\"text/html;charset=UTF-8\">
@@ -719,6 +717,7 @@ BEGIN
 </head>
 <body>
 <div style=\"color:white;background:lightblue;padding:4px;\">
+' | CASE WHEN back != '' THEN '<a href=\"' | back| '\">Back</a> | ' ELSE '' END | '
 <a href=/Menu>Menu</a> 
 | <a target=_blank href=/Menu>New Window</a>
 | <a href=/Manual>Manual</a>
@@ -809,6 +808,18 @@ BEGIN
   SELECT '</body></html>'
 END
 GO
+CREATE FN [web].[UrlEncode]( s string ) RETURNS string AS
+BEGIN
+  /* Would probably be better to do this using builtin function */
+  SET s = REPLACE( s, '%', '%25' )
+  SET s = REPLACE( s, '&', '%26' )
+  SET s = REPLACE( s, '=', '%3D' )
+  --SET s = REPLACE( s, '?', '%3F' )
+  --SET s = REPLACE( s, '/', '%2F' )
+  --SET s = REPLACE( s, '#', '%23' )
+  RETURN s
+END
+GO
 CREATE FN [web].[pubhead]( title string ) AS 
 BEGIN 
   EXEC web.SetContentType( 'text/html;charset=utf-8' )
@@ -857,7 +868,7 @@ BEGIN
   FROM sys.Column WHERE Id = k
 END
 GO
-CREATE FN [browse].[ChildSql]( colId int, k int ) RETURNS string AS 
+CREATE FN [browse].[ChildSql]( colId int, k int, ba string ) RETURNS string AS 
 BEGIN 
   /* Returns SQL to display a child table, with hyperlinks where a column refers to another table */
   DECLARE col string, colid int, colName string, type int, th string, ob string
@@ -878,7 +889,7 @@ BEGIN
       | CASE 
         WHEN df != '' THEN df | '(' | col | ')'
         WHEN nf != '' 
-        THEN '''<a href=\"/ShowRow?t=' | ref | '&k=''|' | col | '|''\">''|' | nf | '(' | col | ')' | '|''</a>''' 
+        THEN '''<a href=\"/ShowRow?t=' | ref | ba | '&k=''|' | col | '|''\">''|' | nf | '(' | col | ')' | '|''</a>''' 
         ELSE col
         END,
         th = th | '<TH>' | CASE WHEN label != '' THEN label ELSE colName END
@@ -886,15 +897,15 @@ BEGIN
   DECLARE kcol string SET kcol = sys.QuoteName(Name) FROM sys.Column WHERE Id = colId
   RETURN 
    'SELECT ''<TABLE><TR><TH>' | th | ''' '
-   | 'SELECT ' | '''<TR><TD><a href=\"ShowRow?' | browse.tablearg(table) | '&k=''| Id | ''\">Show</a> '''
+   | 'SELECT ' | '''<TR><TD><a href=\"ShowRow?' | browse.tablearg(table) | '&k=''| Id | ''' | ba | '\">Show</a> '''
      | result | ' FROM ' | sys.TableName( table ) | ' WHERE ' | kcol | ' = ' | k | CASE WHEN ob != '' THEN ' ORDER BY ' | ob ELSE '' END
    | ' SELECT ''</TABLE>'''
 END
 GO
-CREATE FN [browse].[ColNames]( table int ) RETURNS string AS
+CREATE FN [browse].[ColNames]( table int, ba string ) RETURNS string AS
 BEGIN
   DECLARE col string
-  FOR col = '<a href=\"/BrowseColInfo?k=' | Id | '\">' | Name | '</a>' 
+  FOR col = '<a href=\"/BrowseColInfo?k=' | Id | ba | '\">' | Name | '</a>' 
     | ' ' | sys.TypeName(Type) /* | ' pos=' | browse.ColPos(Id) */
   FROM sys.Column WHERE Table = table
   ORDER BY browse.ColPos(Id), Id
@@ -924,7 +935,7 @@ BEGIN
   RETURN pos
 END
 GO
-CREATE FN [browse].[ColValues]( table int ) RETURNS string AS
+CREATE FN [browse].[ColValues]( table int, ba string ) RETURNS string AS
 BEGIN
   DECLARE col string, colid int
   FOR colid = Id, col = CASE 
@@ -942,7 +953,7 @@ BEGIN
       CASE 
       WHEN df != '' THEN df | '(' | col | ')'
       WHEN nf != '' 
-      THEN '''<a href=\"/ShowRow?' | browse.tablearg(ref) | '&k=''|' | col | '|''\">''|' | nf | '(' | col | ')' | '|''</a>''' 
+      THEN '''<a href=\"/ShowRow?' | browse.tablearg(ref) | '&k=''|' | col | '|'''|ba|'\">''|' | nf | '(' | col | ')' | '|''</a>''' 
       ELSE col
       END
   END
@@ -1122,6 +1133,8 @@ END
 GO
 CREATE FN [browse].[ShowSql](table int, k int) RETURNS string AS
 BEGIN
+  DECLARE ba string SET ba = browse.backargs()
+
   DECLARE cols string, col string, colname string, colid int
   FOR colid = Id, colname = Name, col = CASE 
     WHEN Type % 8 = 2 THEN 'htm.Encode(' | Name | ')'
@@ -1139,7 +1152,7 @@ BEGIN
       | '''<p>' | colname | ': '' | '
       | CASE 
         WHEN df != '' THEN df | '(' | col | ')'
-        WHEN nf != '' THEN '''<a href=\"/ShowRow?' | browse.tablearg(ref) | '&k=''|' | col | '|''\">''|' | nf | '(' | col | ')' | '|''</a>''' 
+        WHEN nf != '' THEN '''<a href=\"/ShowRow?' | browse.tablearg(ref) | ba | '&k=''|' | col | '|''\">''|' | nf | '(' | col | ')' | '|''</a>''' 
         ELSE col
         END
   END
@@ -1147,24 +1160,33 @@ BEGIN
   RETURN '  
     DECLARE t int SET t = '|table|'
     DECLARE k int SET k = '|k|'
-    DECLARE title string SET title = browse.TableTitle( t )' 
-      | CASE WHEN namefunc = '' THEN '' ELSE ' | '' '' | ' | namefunc | '(k)' END | '
-    EXEC web.Head( title )
-    SELECT ''<b>'' | title | ''</b><br>''
+
+    DECLARE ok int SET ok = Id FROM ' | sys.TableName(table) | ' WHERE Id = k
+    IF ok = k
+    BEGIN
+      DECLARE title string SET title = browse.TableTitle( t )' 
+        | CASE WHEN namefunc = '' THEN '' ELSE ' | '' '' | ' | namefunc | '(k)' END | '
+      EXEC web.Head( title )
+      SELECT ''<b>'' | title | ''</b><br>''
   '
   | ' SELECT ' | cols | ' FROM ' | sys.TableName(table) | ' WHERE Id = k'
-  | ' SELECT ''<p><a href=\"/EditRow?'' | browse.tablearg(t) | ''&k='' | k | ''\">Edit</a>'''
+  | ' SELECT ''<p><a href=\"/EditRow?'' | browse.tablearg(t) | ''&k='' | k | '''| ba |'\">Edit</a>'''
   | '
-  DECLARE col int
-  FOR col = Id FROM browse.Column WHERE RefersTo = t
-  BEGIN
-    SELECT ''<p><b>'' | browse.TableTitle( Table ) | ''</b>''
-     | '' <a href=\"AddChild?'' | browse.fieldarg(col) | ''&p='' | k | ''\">Add</a>''
-    FROM sys.Column WHERE Id = col
-    EXECUTE( browse.ChildSql( col, k ) )
+    DECLARE col int
+    FOR col = Id FROM browse.Column WHERE RefersTo = t
+    BEGIN
+      SELECT ''<p><b>'' | browse.TableTitle( Table ) | ''</b>''
+       | '' <a href=\"AddChild?'' | browse.fieldarg(col) | ''&p='' | k | '''|ba|'\">Add</a>''
+      FROM sys.Column WHERE Id = col
+      EXECUTE( browse.ChildSql( col, k, '''|ba|''' ) )
+    END
+    SELECT ''<p><a href=\"/ShowTable?'' | browse.tablearg(t) | ''\">'' | browse.TableTitle(t) | '' Table</a>''
+    EXEC web.Trailer()
   END
-  SELECT ''<p><a href=\"/ShowTable?'' | browse.tablearg(t) | ''\">'' | browse.TableTitle(t) | '' Table</a>''
-  EXEC web.Trailer()
+  ELSE
+  BEGIN
+    EXEC web.Redirect( browse.backurl() )
+  END
 '
 END
 GO
@@ -1198,6 +1220,59 @@ BEGIN
       | sys.QuoteName(col) | ' = ' | browse.ColParser( colId, type, f )
   END
   RETURN 'UPDATE ' | sys.TableName( table ) | ' SET ' | alist | ' WHERE Id =' | k
+END
+GO
+CREATE FN [browse].[backargs]() RETURNS string AS 
+BEGIN 
+  DECLARE keep string
+
+  /* Cleaner approach would be to iterate over all query args except b[n] */
+  DECLARE n int, v string
+  SET n = 1
+  WHILE n < 6
+  BEGIN
+    DECLARE name string
+    SET name = CASE 
+      WHEN n = 2 THEN 'n'
+      WHEN n = 3 THEN 'k'
+      WHEN n = 4 THEN 'p'
+      WHEN n = 5 THEN 'f'
+      ELSE 's'     
+    END
+    SET v = web.Query(name)
+    IF v != '' SET keep = keep | CASE WHEN keep = '' THEN '?' ELSE '&' END | name | '=' | v
+    SET n = n + 1
+  END      
+
+  SET keep = web.Path() | keep
+
+  SET n = 1
+  WHILE 1 = 1
+  BEGIN
+    SET v = web.Query( 'b' | n )
+    IF v = ''
+      RETURN result | '&b' | n | '=' | web.UrlEncode(keep)
+    ELSE
+      SET result = result | '&b' | n | '=' | web.UrlEncode(v)
+    SET n = n + 1
+  END
+END
+GO
+CREATE FN [browse].[backurl]() RETURNS string AS
+BEGIN
+  DECLARE n int
+  SET n = 1
+  WHILE 1 = 1
+  BEGIN
+    DECLARE v string, pv string
+    SET v = web.Query('b' | n )
+    IF v = '' RETURN pv | result
+
+    IF pv != '' SET result = result | '&b' | (n-1) | '=' | web.UrlEncode(pv)
+    SET pv = v
+
+    SET n = n + 1
+  END
 END
 GO
 CREATE FN [browse].[fieldarg](f int) RETURNS string AS
@@ -1266,7 +1341,9 @@ BEGIN
     SET ex = EXCEPTION()
     IF ex = '' 
     BEGIN
-      EXEC web.Redirect( 'ShowRow?' | browse.tablearg(t) | '&k=' | LASTID() )
+      -- DECLARE ba string SET ba = browse.backargs()
+      -- EXEC web.Redirect( 'ShowRow?' | browse.tablearg(t) | '&k=' | LASTID() | ba )
+      EXEC web.Redirect( browse.backurl() )       
       RETURN 
     END
   END
@@ -1296,7 +1373,8 @@ BEGIN
     SET ex = EXCEPTION()
     IF ex = '' 
     BEGIN
-      EXEC web.Redirect( 'ShowRow?' | browse.tablearg(t) | '&k=' | LASTID() )
+      DECLARE ba string SET ba = browse.backargs()
+      EXEC web.Redirect( 'ShowRow?' | browse.tablearg(t) | '&k=' | LASTID() | ba )
       RETURN
     END
   END
@@ -1451,24 +1529,26 @@ BEGIN
       SET ex = EXCEPTION()
       IF ex = '' 
       BEGIN
-        EXEC web.Redirect( 'ShowRow?' | browse.tablearg(t) | '&k=' | k )
+        EXEC web.Redirect( browse.backurl() )
         RETURN
       END
     END
     ELSE IF submit = 'Delete'
     BEGIN
       EXECUTE( 'DELETE FROM ' | sys.TableName( t ) | ' WHERE Id =' | k )
-      EXEC web.Redirect( 'Menu' )
+      EXEC web.Redirect( browse.backurl() )
       RETURN
     END      
   END
  
   EXEC web.Head( 'Edit ' | browse.TableTitle( t ) )
   IF ex != '' SELECT '<p>Error: ' | htm.Encode(ex)
-  SELECT '<form method=post>' 
-  
+
+  SELECT '<form method=post>'  
   EXECUTE( browse.FormUpdateSql( t, k ) )
-  SELECT '<p><input name=\"$submit\" type=submit value=Save> <input name=\"$submit\" type=submit value=Delete></form>'
+  SELECT '<p><input name=\"$submit\" type=submit value=Save></form>'
+
+  SELECT '<form method=post><input name=\"$submit\" type=submit value=Delete></form>'
   EXEC web.Trailer()
 END
 GO
@@ -1745,6 +1825,7 @@ BEGIN
 
    EXEC web.Head('System Menu')
    SELECT '
+<p>Martin Dent project. Archive project. Port BMIB. Start a blog.
 <p><a href=\"/ShowTable?s=dbo&n=Cust\">Customers</a> | <a href=\"/OrderSummary\">Order Summary</a>
 <p><a target=_blank href=\"/\">Public Site Home Page</a>
 <h3>System</h3>
@@ -1752,8 +1833,10 @@ BEGIN
 <p><a href=/ListLogins>Logins</a>
 <p><a href=/ListFile>Files</a>
 <p><a href=/FileUpload>File Upload</a>
-<p><a target=_blank href=/ScriptAll>Script entire database</a> | <a target=_blank href=/ScriptExact>Exact</a>
-<p><a href=/CheckAll>Check all functions compile ok</a>
+<p><a target=_blank href=/ScriptAll?mode=1>Script entire database</a> 
+  | <a target=_blank href=/ScriptAll?mode=2>Filtered</a>    
+  | <a target=_blank href=/ScriptExact>Exact</a>
+<p><a href=/CheckAll>Check all functions compile ok</a> | <a href=/VerifyDB>Verify Database</a>
 <h3>Schemas</h3>'
    SELECT '<a href=ShowSchema?s=' | Name | '>' | Name | '</a> | ' FROM sys.Schema ORDER BY Name
 
@@ -1764,6 +1847,8 @@ CREATE FN [handler].[/OrderSummary]() AS
 BEGIN
   DECLARE cu int SET cu = login.get(1) IF cu = 0 RETURN
 
+  DECLARE ba string SET ba = browse.backargs()
+
   EXEC web.Head( 'Order Summary' )
   SELECT '<table><tr><th>Cust<th>Total<th>Count</tr>'
 
@@ -1773,7 +1858,7 @@ BEGIN
     SET sum = 0, count = 0
     FOR total = Total FROM dbo.Order WHERE Cust = cust 
       SET sum = sum + total, count = count + 1
-    SELECT '<tr><td><a href=ShowRow?s=dbo&n=Cust&k=' | cust | '>' | dbo.CustName(cust) | '</a>' 
+    SELECT '<tr><td><a href=ShowRow?s=dbo&n=Cust&k=' | cust | ba | '>' | dbo.CustName(cust) | '</a>' 
       | '<td align=right>' | sum | '<td align=right>' | count
     SET gsum = gsum + sum, gcount = gcount + count
   END
@@ -1797,9 +1882,11 @@ BEGIN
 
   EXEC web.SetContentType( 'text/plain;charset=utf-8' )
 
+  DECLARE mode int SET mode = PARSEINT(web.Query('mode'))
+
   DECLARE s int
   FOR s = Id FROM sys.Schema
-    EXEC sys.ScriptSchema(s)
+    EXEC sys.ScriptSchema(s,mode)
   FOR s = Id FROM sys.Schema
     EXEC sys.ScriptSchemaBrowse(s)
 END
@@ -1812,7 +1899,7 @@ BEGIN
 
   DECLARE t int
   FOR t = Id FROM sys.Table
-    EXEC sys.ScriptData(t)
+    EXEC sys.ScriptData(t,1)
 END
 GO
 CREATE FN [handler].[/SetPassword]() AS 
@@ -1852,15 +1939,17 @@ CREATE FN [handler].[/ShowSchema]() AS
 BEGIN
   DECLARE cu int SET cu = login.get(1) IF cu = 0 RETURN
 
+  DECLARE ba string SET ba = browse.backargs()
+
   DECLARE s string SET s = web.Query('s')
   DECLARE sid int SET sid = Id FROM sys.Schema WHERE Name = s
   EXEC web.Head( 'Schema ' | s )
   SELECT '<h1>Schema ' | s | '</h1>'
   SELECT '<h2>Tables</h2>'
-  SELECT '<p><a href=\"ShowTable?' | browse.tablearg(Id) | '\">' | Name | '</a>'
+  SELECT '<p><a href=\"ShowTable?' | browse.tablearg(Id) | ba | '\">' | Name | '</a>'
   FROM sys.Table WHERE Schema = sid ORDER BY Name
   SELECT '<h2>Functions</h2>' 
-  SELECT '<p><a href=\"EditFunc?s=' | s | '&n=' | Name | '\">' | Name | '</a>'
+  SELECT '<p><a href=\"EditFunc?s=' | s | '&n=' | Name | ba | '\">' | Name | '</a>'
   FROM sys.Function WHERE Schema = sid ORDER BY Name
   EXEC web.Trailer()
 END
@@ -1869,29 +1958,43 @@ CREATE FN [handler].[/ShowTable]() AS
 BEGIN 
   DECLARE cu int SET cu = login.get(1) IF cu = 0 RETURN
 
+  DECLARE ba string SET ba = browse.backargs()
+
   DECLARE t int SET t = browse.tableid()
 
   DECLARE title string SET title = browse.TableTitle( t )
   SET title = title | ' Table'
   EXEC web.Head( title )
-  SELECT '<b>' | title | '</b> <a href=/BrowseInfo?' | browse.tablearg(t) | '>Settings</a>'   
-    | '<p><b>Columns:</b> ' | browse.ColNames( t )
+  SELECT '<b>' | title | '</b> <a href=/BrowseInfo?' | browse.tablearg(t) | ba | '>Settings</a>'   
+    | '<p><b>Columns:</b> ' | browse.ColNames( t, ba )
 /*
   SELECT '<p><b>Indexes</b>'
   SELECT '<br>' | sys.QuoteName(Name) | ' ' | sys.IndexCols(Id)
   FROM sys.Index WHERE Table = t
 */
-  SELECT '<p><b>Rows</b> <a href=\"AddRow?' | browse.tablearg(t) | '\">Add</a>'
-  
+  SELECT '<p><b>Rows</b> <a href=\"AddRow?' | browse.tablearg(t) | ba | '\">Add</a>'
+
   DECLARE orderBy string SET orderBy = DefaultOrder FROM browse.Table WHERE Id = t
-  DECLARE sql string SET sql ='SELECT ''<br><a href=\"ShowRow?' | browse.tablearg(t) | '&k=''| Id |''\">Show</a> ''| ''''|' 
-    | browse.ColValues(Id)  
+  DECLARE sql string SET sql ='SELECT ''<br><a href=\"ShowRow?' | browse.tablearg(t)
+    | '&k=''| Id | ''' | ba |'\">Show</a> ''| ''''|' 
+    | browse.ColValues(Id,ba)  
     | ' FROM ' 
     | sys.TableName(Id)
     | CASE WHEN orderBy != '' THEN ' ORDER BY ' | orderBy ELSE '' END
   FROM sys.Table WHERE Id = t
 
   EXECUTE( sql )
+
+  EXEC web.Trailer()
+END
+GO
+CREATE FN [handler].[/VerifyDB]() AS
+BEGIN
+  DECLARE cu int SET cu = login.get(1) IF cu = 0 RETURN
+
+  EXEC web.Head('Check All Functions compile')
+
+  SELECT '<p>' | VERIFYDB()
 
   EXEC web.Trailer()
 END
@@ -1941,7 +2044,7 @@ BEGIN
 END
 GO
 INSERT INTO [dbo].[Cust](Id,[FirstName],[LastName],[Age],[City],[x]) VALUES 
-(1,'Mary','Poppins',67,'London',15)
+(1,'Mary','Poppins',67,'London',17)
 (2,'Clare','Smith',32,'',6)
 (3,'Ron','Jones',45,'',0)
 (4,'Peter','Perfect',36,'',1)
@@ -1955,8 +2058,15 @@ INSERT INTO [dbo].[Order](Id,[Cust],[Total],[Date],[Info]) VALUES
 (1,8,99,1035517,'')
 (2,3,9,1035526,'')
 (3,1,1005,1035526,'test')
-(4,1,130,1035526,'')
 (5,2,5,1035528,'')
+(6,1,50,1035532,'')
+(7,1,12,1035532,'')
+(8,3,99,1035532,'Something')
+(9,4,2,1035532,'')
+(10,5,0,1035532,'')
+(12,4,4,1035532,'xxxx')
+(13,4,9000,1035532,'')
+(14,6,9000,1035532,'')
 GO
 
 --############################################
@@ -2157,13 +2267,13 @@ CREATE FN [login].[get]( role int ) RETURNS int AS
 BEGIN
   /* Get the current logged in user. Note: role is not yet checked */
 
+  DECLARE username string SET username = web.Form('username')
+
   /*
-     Login is initially disabled. Remove or comment out the line below enable Login after Login password has been set for some user.
+     Login is initially disabled. Remove or comment out the line below enable Login after Login password has been setup for some user.
      In addition, the salt string in login.Hash should be changed.
   */
   RETURN 1 -- Login disabled.
-
-  DECLARE username string SET username = web.Form('username')
 
   IF username != ''
   BEGIN
@@ -2198,12 +2308,10 @@ END
 GO
 CREATE FN [login].[hash](s string) RETURNS binary AS
 BEGIN
-  -- Note: the salt string below should be different for each system.
-  SET result = ARGON(s,'some random saltiness')
+  SET result = ARGON(s,'pomesoft saltiness')
 END
 GO
 INSERT INTO [login].[user](Id,[Name],[HashedPassword]) VALUES 
-(1,'Some User',0x00)
 GO
 
 --############################################
@@ -2249,7 +2357,6 @@ BEGIN
 END
 GO
 INSERT INTO [timed].[Job](Id,[fn],[at]) VALUES 
-(2,'email.Retry',63827456246417975)
 GO
 
 --############################################
