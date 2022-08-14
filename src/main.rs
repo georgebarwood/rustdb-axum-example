@@ -115,7 +115,8 @@ async fn main() {
         "0.0.0.0:80"
     }
     .to_string();
-    println!("Listening on {}", listen);
+    println!("Listening on {listen}");
+    let listen = listen.parse().unwrap();
 
     let is_master: bool = if args.len() > 2 {
         args[2] == "master"
@@ -157,9 +158,6 @@ async fn main() {
     }
     let bmap = Arc::new(bmap);
 
-    // Get write-access to database ( there will only be one of these ).
-    let wapd = AccessPagedData::new_writer(spd.clone());
-
     // Construct task communication channels.
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(1);
     let (email_tx, email_rx) = mpsc::unbounded_channel::<()>();
@@ -169,7 +167,7 @@ async fn main() {
 
     // Construct shared state.
     let ss = Arc::new(SharedState {
-        spd,
+        spd: spd.clone(),
         bmap: bmap.clone(),
         tx,
         email_tx,
@@ -198,6 +196,10 @@ async fn main() {
     let ssc = ss.clone();
     thread::spawn(move || {
         let ss = ssc;
+
+        // Get write-access to database ( there will only be one of these ).
+        let wapd = AccessPagedData::new_writer(spd);
+
         let db = Database::new(wapd, if is_master { init::INITSQL } else { "" }, bmap);
         if !is_master {
             let _ = sync_tx.send(db.is_new);
@@ -221,7 +223,7 @@ async fn main() {
             let updates = db.save();
             if updates > 0 {
                 let _ = ss.wait_tx.send(());
-                println!("Pages updated={}", updates);
+                println!("Pages updated={updates}");
             }
             let _x = sm.reply.send(sm.st);
         }
@@ -231,11 +233,11 @@ async fn main() {
     let app = Router::new().route("/*key", get(h_get).post(h_post)).layer(
         ServiceBuilder::new()
             .layer(CookieManagerLayer::new())
-            .layer(Extension(ss)),
+            .layer(Extension(ss.clone())),
     );
 
     // Run the axum app.
-    axum::Server::bind(&listen.parse().unwrap())
+    axum::Server::bind(&listen)
         .serve(app.into_make_service())
         .await
         .unwrap();
@@ -348,13 +350,13 @@ async fn sync_loop(rx: oneshot::Receiver<bool>, state: Arc<SharedState>) {
             let lt = db.table("log", "Transaction");
             lt.id_gen.get()
         };
-        let url = format!("/GetTransaction?k={}", tid);
+        let url = format!("/GetTransaction?k={tid}");
         let ser = rget(state.clone(), &url).await;
         if !ser.is_empty() {
             let mut st = ServerTrans::new();
             st.x.qy = rmp_serde::from_slice(&ser).unwrap();
             state.process(st).await;
-            println!("Slave database updated Transaction Id={}", tid);
+            println!("Slave database updated Transaction Id={tid}");
         }
     }
 }
@@ -396,18 +398,19 @@ async fn rget(state: Arc<SharedState>, query: &str) -> Vec<u8> {
                 match response
                 {
                   Ok(r) => {
-                     if r.status().is_success()
+                     let status = r.status();
+                     if status.is_success()
                      {
                          match r.bytes().await {
                             Ok(b) => { return b.to_vec(); }
-                            Err(e) => { println!("rget failed to get bytes err={}", e ); }
+                            Err(e) => { println!("rget failed to get bytes err={e}" ); }
                          }
                      } else {
-                         println!("rget bad response status = {}", r.status());
+                         println!("rget bad response status = {status}");
                      }
                   }
                   Err(e) => {
-                    println!("rget send error {}", e);
+                    println!("rget send error {e}");
                   }
                }
             }
@@ -478,16 +481,16 @@ async fn email_loop(mut rx: mpsc::UnboundedReceiver<()>, state: Arc<SharedState>
                         let password = a.str(&db, 2);
 
                         send_list.push((
-                            msg, from, to, title, body, format, server, username, password,
+                            msg,
+                            (from, to, title, body, format),
+                            (server, username, password),
                         ));
                     }
                 }
             }
         }
-        for (msg, from, to, title, body, format, server, username, password) in send_list {
-            let blocking_task = tokio::task::spawn_blocking(move || {
-                send_email(from, to, title, body, format, server, username, password)
-            });
+        for (msg, email, account) in send_list {
+            let blocking_task = tokio::task::spawn_blocking(move || send_email(email, account));
             let result = blocking_task.await.unwrap();
             match result {
                 Ok(_) => email_sent(&state, msg).await,
@@ -536,14 +539,8 @@ impl From<lettre::transport::smtp::Error> for EmailError {
 
 /// Send an email using lettre.
 fn send_email(
-    from: String,
-    to: String,
-    title: String,
-    body: String,
-    format: i64,
-    server: String,
-    username: String,
-    password: String,
+    (from, to, title, body, format): (String, String, String, String, i64),
+    (server, username, password): (String, String, String),
 ) -> Result<(), EmailError> {
     use lettre::{
         message::SinglePart,

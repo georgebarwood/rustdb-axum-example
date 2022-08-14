@@ -1825,7 +1825,6 @@ BEGIN
 
    EXEC web.Head('System Menu')
    SELECT '
-<p>Martin Dent project. Archive project. Port BMIB. Start a blog.
 <p><a href=\"/ShowTable?s=dbo&n=Cust\">Customers</a> | <a href=\"/OrderSummary\">Order Summary</a>
 <p><a target=_blank href=\"/\">Public Site Home Page</a>
 <h3>System</h3>
@@ -2308,7 +2307,7 @@ END
 GO
 CREATE FN [login].[hash](s string) RETURNS binary AS
 BEGIN
-  SET result = ARGON(s,'pomesoft saltiness')
+  SET result = ARGON(s,'some random saltiness')
 END
 GO
 INSERT INTO [login].[user](Id,[Name],[HashedPassword]) VALUES 
