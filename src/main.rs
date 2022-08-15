@@ -1,3 +1,4 @@
+/// Database initialisation string.
 mod init;
 
 use mimalloc::MiMalloc;
@@ -116,7 +117,7 @@ async fn main() {
     }
     .to_string();
     println!("Listening on {listen}");
-    let listen = listen.parse().unwrap();
+    let listen = listen.parse().expect("Error parsing listen address:port");
 
     let is_master: bool = if args.len() > 2 {
         args[2] == "master"
@@ -379,7 +380,7 @@ async fn sleep_real(secs: u64) {
     }
 }
 
-/// Get data from master seerver, retries in case of error.
+/// Get data from master server, retries in case of error.
 async fn rget(state: Arc<SharedState>, query: &str) -> Vec<u8> {
     // get a client builder
     let client = reqwest::Client::builder()
@@ -576,12 +577,14 @@ fn send_email(
     Ok(())
 }
 
+/// Update the database to reflect an email was sent.
 async fn email_sent(state: &SharedState, msg: u64) {
     let mut st = ServerTrans::new();
     st.x.qy.sql = Arc::new(format!("EXEC email.Sent({})", msg));
     state.process(st).await;
 }
 
+/// Update the database to reflect an error occurred sending an email.
 async fn email_error(state: &SharedState, msg: u64, retry: i8, err: String) {
     let mut st = ServerTrans::new();
     let src = format!("EXEC email.LogSendError({},{},'{}')", msg, retry, err);
