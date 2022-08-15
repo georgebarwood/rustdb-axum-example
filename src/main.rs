@@ -81,6 +81,7 @@ struct SharedState {
     is_master: bool,
     replicate_source: String,
     replicate_credentials: String,
+    counter: std::sync::Mutex<usize>,
 }
 
 impl SharedState {
@@ -101,6 +102,28 @@ impl SharedState {
             }
         }
         st
+    }
+
+    fn countup(&self, to: usize, reset: bool) -> bool {
+        let mut x = self.counter.lock().unwrap();
+        let n = *x;
+        if n >= to && reset {
+            *x = 0;
+            true
+        } else {
+            *x = n + 1;
+            false
+        }
+    }
+
+    fn check_cache(&self) {
+        let mem = self.spd.clear_cache(false);
+        if self.countup(10, mem > 100000) {
+            let total = self.spd.clear_cache(true);
+            println!("Cache cleared total={total}");
+        } else {
+            println!("check_cache mem={mem}");
+        }
     }
 }
 
@@ -177,6 +200,7 @@ async fn main() {
         is_master,
         replicate_source,
         replicate_credentials,
+        counter: std::sync::Mutex::new(0),
     });
 
     if is_master {
@@ -227,6 +251,8 @@ async fn main() {
                 println!("Pages updated={updates}");
             }
             let _x = sm.reply.send(sm.st);
+
+            ss.check_cache();
         }
     });
 
@@ -258,11 +284,13 @@ async fn h_get(
     st.x.qy.cookies = map_cookies(cookies);
 
     let mut wait_rx = state.wait_tx.subscribe();
+    let spd = state.spd.clone();
+    let bmap = state.bmap.clone();
 
     let mut st = tokio::task::spawn_blocking(move || {
         // GET requests should be read-only.
-        let apd = AccessPagedData::new_reader(state.spd.clone());
-        let db = Database::new(apd, "", state.bmap.clone());
+        let apd = AccessPagedData::new_reader(spd);
+        let db = Database::new(apd, "", bmap);
         let sql = st.x.qy.sql.clone();
         db.run_timed(&sql, &mut *st.x);
         st
@@ -279,6 +307,7 @@ async fn h_get(
             }
         }
     }
+    state.check_cache();
     st
 }
 
