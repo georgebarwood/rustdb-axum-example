@@ -81,7 +81,7 @@ struct SharedState {
     is_master: bool,
     replicate_source: String,
     replicate_credentials: String,
-    counter: std::sync::Mutex<usize>,
+    cache_mem: usize,
 }
 
 impl SharedState {
@@ -104,26 +104,8 @@ impl SharedState {
         st
     }
 
-    fn countup(&self, to: usize, reset: bool) -> bool {
-        let mut x = self.counter.lock().unwrap();
-        let n = *x;
-        if n >= to && reset {
-            *x = 0;
-            true
-        } else {
-            *x = n + 1;
-            false
-        }
-    }
-
-    fn check_cache(&self) {
-        let mem = self.spd.clear_cache(false);
-        if self.countup(10, mem > 100000) {
-            let total = self.spd.clear_cache(true);
-            println!("Cache cleared total={total}");
-        } else {
-            println!("check_cache mem={mem}");
-        }
+    fn trim_cache(&self) {
+        self.spd.trim_cache(self.cache_mem);
     }
 }
 
@@ -200,7 +182,7 @@ async fn main() {
         is_master,
         replicate_source,
         replicate_credentials,
-        counter: std::sync::Mutex::new(0),
+        cache_mem: 50 * 1000000, // 50MB
     });
 
     if is_master {
@@ -252,7 +234,7 @@ async fn main() {
             }
             let _x = sm.reply.send(sm.st);
 
-            ss.check_cache();
+            ss.trim_cache();
         }
     });
 
@@ -307,7 +289,7 @@ async fn h_get(
             }
         }
     }
-    state.check_cache();
+    state.trim_cache();
     st
 }
 
