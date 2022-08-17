@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 /// Database initialisation string.
 mod init;
 
