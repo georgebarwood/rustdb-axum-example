@@ -83,7 +83,6 @@ struct SharedState {
     is_master: bool,
     replicate_source: String,
     replicate_credentials: String,
-    cache_mem: usize,
 }
 
 impl SharedState {
@@ -107,7 +106,7 @@ impl SharedState {
     }
 
     fn trim_cache(&self) {
-        self.spd.trim_cache(self.cache_mem);
+        self.spd.trim_cache();
     }
 }
 
@@ -144,6 +143,7 @@ async fn main() {
     // SharedPagedData allows for one writer and multiple readers.
     // Note that readers never have to wait, they get a "virtual" read-only copy of the database.
     let spd = Arc::new(SharedPagedData::new(stg));
+    spd.stash.write().unwrap().mem_limit = 10 * 10000000; // 10MB cache.
 
     // Construct map of "builtin" functions that can be called in SQL code.
     // Include extra functions ARGON, EMAILTX and SLEEP as well as the standard functions.
@@ -184,7 +184,6 @@ async fn main() {
         is_master,
         replicate_source,
         replicate_credentials,
-        cache_mem: 50 * 1000000, // 50MB
     });
 
     if is_master {
