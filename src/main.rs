@@ -143,7 +143,7 @@ async fn main() {
     // SharedPagedData allows for one writer and multiple readers.
     // Note that readers never have to wait, they get a "virtual" read-only copy of the database.
     let spd = Arc::new(SharedPagedData::new(stg));
-    spd.stash.write().unwrap().mem_limit = 10 * 10000000; // 10MB cache.
+    spd.stash.write().unwrap().mem_limit = 100 * 10000000; // 100MB cache.
 
     // Construct map of "builtin" functions that can be called in SQL code.
     // Include extra functions ARGON, EMAILTX and SLEEP as well as the standard functions.
@@ -154,12 +154,14 @@ async fn main() {
         ("EMAILTX", DataKind::Int, CompileFunc::Int(c_email_tx)),
         ("SLEEP", DataKind::Int, CompileFunc::Int(c_sleep)),
         ("TRANSWAIT", DataKind::Int, CompileFunc::Int(c_trans_wait)),
+/*
         ("BINPACK", DataKind::Binary, CompileFunc::Value(c_binpack)),
         (
             "BINUNPACK",
             DataKind::Binary,
             CompileFunc::Value(c_binunpack),
         ),
+*/
     ];
     for (name, typ, cf) in list {
         bmap.insert(name.to_string(), (typ, cf));
@@ -740,6 +742,7 @@ impl CExp<i64> for TransWait {
     }
 }
 
+/*
 /// Compile call to BINPACK.
 fn c_binpack(b: &Block, args: &mut [Expr]) -> CExpPtr<Value> {
     check_types(b, args, &[DataKind::Binary]);
@@ -784,3 +787,4 @@ impl CExp<Value> for Binunpack {
         }
     }
 }
+*/
